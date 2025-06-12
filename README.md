@@ -18,8 +18,8 @@
 
 1. 克隆仓库：
 ```bash
-git clone [repository_url]
-cd [repository_name]
+git clone https://github.com/kalogyu/wxq_postgradute.git
+cd wxq_postgradute
 ```
 
 2. 创建虚拟环境（推荐）：
