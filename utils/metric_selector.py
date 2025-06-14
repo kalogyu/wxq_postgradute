@@ -206,8 +206,21 @@ class MetricSelector:
 
     def _prepare_prompt(self, characteristics: DatasetCharacteristics) -> str:
         """准备发送给文心一言的提示"""
-        prompt = f"""作为一个数据科学专家，请分析以下数据集特征，并推荐适用的评估指标。我们有以下四个具体的评估指标函数：
+        try:
+            # 读取Excel文件获取列名和第一行数据
+            file_path = r"E:\wxq_postgradute\数据集\extracted_excel_files\地震监测情况.xlsx"
+            df = pd.read_excel(file_path)
+            columns = df.columns.tolist()
+            first_row = df.iloc[0].tolist()
+            
+            # 构建数据预览信息
+            data_preview = "数据预览：\n"
+            data_preview += "列名：" + ", ".join(columns) + "\n"
+            data_preview += "第一行数据：" + ", ".join(str(x) for x in first_row)
+            
+            prompt = f"""作为一个数据科学专家，请分析以下数据集特征，并推荐适用的评估指标。我们有以下四个评估指标函数：
 
+必需指标（必须包含在推荐中）：
 1. Volume Metric (get_Volume.py)
    - 用途：评估数据集的规模和复杂度
    - 具体实现：
@@ -217,27 +230,7 @@ class MetricSelector:
      * 生成文件大小与得分的可视化分析
    - 适用场景：需要评估数据集大小是否合适，以及数据规模对存储和处理的影响
 
-2. ML Prediction Metric (get_ML_Prediction.py)
-   - 用途：评估数据集对机器学习任务的适用性
-   - 具体实现：
-     * 使用随机森林评估特征重要性
-     * 计算模型性能得分（分类/回归）
-     * 评估类别平衡性
-     * 分析特征相关性
-     * 权重分配：模型性能(40%)、特征重要性(30%)、类别平衡(20%)、特征相关性(10%)
-   - 适用场景：数据集将用于机器学习任务，需要评估其预测能力
-
-3. Privacy Metric (get_Privacy.py)
-   - 用途：评估数据集的隐私保护程度
-   - 具体实现：
-     * 评估匿名化等级（原始数据/假名化/差分隐私/完全匿名）
-     * 检查合规性状态
-     * 分析敏感数据类型（姓名/ID/电话/地址/健康数据/金融数据/位置/生物特征）
-     * 评估隐私事件历史风险
-     * 权重分配：匿名化(40%)、合规性(30%)、敏感性(20%)、风险(10%)
-   - 适用场景：数据集包含敏感信息，需要评估隐私保护措施
-
-4. Quality Metric (get_Quality.py)
+2. Quality Metric (get_Quality.py)
    - 用途：评估数据集的质量
    - 具体实现：
      * 计算缺失值比例
@@ -250,6 +243,27 @@ class MetricSelector:
      * 评估分类数据一致性
      * 权重分配：缺失值(15%)、重复数据(15%)、异常值(15%)、一致性(15%)、类型一致性(15%)、范围一致性(10%)、日期一致性(5%)、分类一致性(10%)
    - 适用场景：需要全面评估数据质量，包括完整性、准确性和一致性
+
+可选指标（根据数据集特征决定是否需要）：
+3. ML Prediction Metric (get_ML_Prediction.py)
+   - 用途：评估数据集对机器学习任务的适用性
+   - 具体实现：
+     * 使用随机森林评估特征重要性
+     * 计算模型性能得分（分类/回归）
+     * 评估类别平衡性
+     * 分析特征相关性
+     * 权重分配：模型性能(40%)、特征重要性(30%)、类别平衡(20%)、特征相关性(10%)
+   - 适用场景：数据集将用于机器学习任务，需要评估其预测能力
+
+4. Privacy Metric (get_Privacy.py)
+   - 用途：评估数据集的隐私保护程度
+   - 具体实现：
+     * 评估匿名化等级（原始数据/假名化/差分隐私/完全匿名）
+     * 检查合规性状态
+     * 分析敏感数据类型（姓名/ID/电话/地址/健康数据/金融数据/位置/生物特征）
+     * 评估隐私事件历史风险
+     * 权重分配：匿名化(40%)、合规性(30%)、敏感性(20%)、风险(10%)
+   - 适用场景：数据集包含敏感信息，需要评估隐私保护措施
 
 当前数据集特征：
 - 样本数量: {characteristics.num_samples}
@@ -265,11 +279,12 @@ class MetricSelector:
 - 是否有敏感属性: {characteristics.has_sensitive_attributes}
 - 数据质量问题: {', '.join(characteristics.data_quality_issues)}
 
-请根据以上信息，分析这个数据集最适合使用哪些评估指标函数。对于每个推荐的指标，请提供详细的理由，说明为什么这个指标函数适合这个数据集。建议按照以下优先级考虑：
-1. 如果数据集有质量问题（缺失值、异常值等），优先考虑 Quality Metric
-2. 如果数据集用于机器学习任务，考虑 ML Prediction Metric
-3. 如果数据集包含敏感信息，考虑 Privacy Metric
-4. 如果需要了解数据集的基本情况，考虑 Volume Metric
+{data_preview}
+
+请根据以上信息，分析这个数据集最适合使用哪些评估指标函数。注意：
+1. Volume Metric 和 Quality Metric 是必需的，必须包含在推荐中
+2. ML Prediction Metric 和 Privacy Metric 是可选的，请根据数据集特征决定是否需要
+3. 对于每个推荐的指标，请提供详细的理由，说明为什么这个指标函数适合这个数据集
 
 请直接返回JSON格式的结果，不要包含任何markdown标记，格式如下：
 {{
@@ -280,7 +295,11 @@ class MetricSelector:
         }}
     ]
 }}"""
-        return prompt
+            return prompt
+            
+        except Exception as e:
+            logger.error(f"准备提示时发生错误: {str(e)}")
+            raise
 
     def _call_ernie_api(self, prompt: str) -> Dict:
         """调用百度文心一言API"""
@@ -303,11 +322,33 @@ class MetricSelector:
         
         try:
             logger.info("正在调用文心一言API...")
+            
+            # 记录发送的prompt
+            log_dir = "logs"
+            if not os.path.exists(log_dir):
+                os.makedirs(log_dir)
+            
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            log_file = os.path.join(log_dir, f"ernie_api_log_{timestamp}.txt")
+            
+            with open(log_file, "w", encoding="utf-8") as f:
+                f.write("=== 发送给文心一言的Prompt ===\n\n")
+                f.write(prompt)
+                f.write("\n\n=== 文心一言的输出 ===\n\n")
+            
             response = requests.post(url, headers=headers, json=payload)
             response.raise_for_status()  # 检查HTTP错误
             
             result = response.json()
             logger.info("成功获取API响应")
+            
+            # 记录文心一言的实际输出
+            if 'result' in result:
+                with open(log_file, "a", encoding="utf-8") as f:
+                    f.write(result['result'])
+            else:
+                with open(log_file, "a", encoding="utf-8") as f:
+                    f.write("API返回错误，未获取到文心一言的输出")
             
             if 'error_code' in result:
                 logger.error(f"API返回错误: {result['error_code']} - {result.get('error_msg', '未知错误')}")
