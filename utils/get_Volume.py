@@ -2,6 +2,8 @@ import math
 import os
 import py7zr
 import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
 from pathlib import Path
 from typing import Union, List, Dict, Tuple
 
@@ -86,40 +88,44 @@ def calculate_excel_size(file_path: Union[str, Path]) -> Tuple[float, Dict]:
     size_gb = file_size_bytes / (1024 * 1024 * 1024)
     return size_gb, info
 
-def quantify_volume(dataset_size_gb: float, max_relevant_size_gb: float = 1000.0) -> float:
+def quantify_volume(dataset_size_gb: float, max_relevant_size_gb: float = 0.17) -> float:
     """
     计算数据集容量得分。
 
-    得分与数据集大小正相关，但采用对数函数模拟边际递减效应。
-    得分将被归一化到0到1之间。
+    使用改进的对数函数计算得分，更好地反映数据价值。
+    考虑到当前最大文件约为170MB，将max_relevant_size_gb设置为0.17GB。
+    使用对数函数可以更好地反映数据价值的边际递减效应。
 
     Args:
         dataset_size_gb (float): 数据集的大小，单位为GB。
-        max_relevant_size_gb (float): 认为数据价值达到饱和或最大相关性的参考大小（GB）。
-                                      超过此大小的数据量可能价值增长放缓。
-                                      这个之后可以根据不同种类的数据集来设置。
+        max_relevant_size_gb (float): 最大相关大小（GB），默认设为0.17GB（170MB）。
 
     Returns:
-        float: 归一化后的数据容量得分 (0到1之间)。
+        float: 数据容量得分 (0到100之间)。
     """
     if dataset_size_gb <= 0:
         return 0.0
 
-    # 使用对数函数来模拟边际递减效应
-    # log(x+1) 确保当 dataset_size_gb 接近0时，结果不会是负无穷
-    log_scaled_size = math.log10(dataset_size_gb + 1)
-
-    # 归一化因子，基于 max_relevant_size_gb
-    # 确保当 dataset_size_gb 达到 max_relevant_size_gb 时，得分接近1
-    normalization_factor = math.log10(max_relevant_size_gb + 1)
-
-    if normalization_factor == 0: # 避免除以零
-        return 0.0
-
-    score = log_scaled_size / normalization_factor
-
-    # 确保得分在0到1之间
-    return max(0.0, min(score, 1.0))
+    # 使用改进的对数函数
+    # 1. 将输入值缩放到更合适的范围
+    # 2. 使用log10函数计算基础得分
+    # 3. 调整系数使最大文件得到接近100分
+    scaled_size = dataset_size_gb * 1000  # 转换为MB
+    base_score = math.log10(scaled_size + 1)  # 加1避免log(0)
+    
+    # 计算最大可能得分（当文件大小为max_relevant_size_gb时）
+    max_scaled_size = max_relevant_size_gb * 1000
+    max_base_score = math.log10(max_scaled_size + 1)
+    
+    # 归一化并缩放到0-100，调整系数使最大文件得到接近100分
+    normalized_score = (base_score / max_base_score) * 120  # 增加系数使最大文件得到更高分
+    
+    # 添加一个缩放因子，使小文件也能得到合理的分数
+    min_score = 15  # 提高最小得分
+    score = min_score + (normalized_score - min_score) * (1 - math.exp(-scaled_size/10))  # 调整衰减速率
+    
+    # 确保得分在0到100之间
+    return max(0.0, min(score, 100.0))
 
 def get_dataset_volume_score(dataset_path: Union[str, Path], max_relevant_size_gb: float = 1000.0) -> tuple[float, float]:
     """
@@ -136,7 +142,7 @@ def get_dataset_volume_score(dataset_path: Union[str, Path], max_relevant_size_g
     score = quantify_volume(size_gb, max_relevant_size_gb)
     return size_gb, score
 
-def get_excel_volume_score(file_path: Union[str, Path], max_relevant_size_gb: float = 1000.0) -> Dict:
+def get_excel_volume_score(file_path: Union[str, Path], max_relevant_size_gb: float = 0.17) -> Dict:
     """
     计算Excel文件的容量得分和详细信息。
 
@@ -150,38 +156,179 @@ def get_excel_volume_score(file_path: Union[str, Path], max_relevant_size_gb: fl
     size_gb, info = calculate_excel_size(file_path)
     score = quantify_volume(size_gb, max_relevant_size_gb)
     
+    # 转换大小为MB显示
+    size_mb = size_gb * 1024
+    
     result = {
         'file_path': str(file_path),
-        'size_gb': size_gb,
+        'size_mb': size_mb,  # 使用MB作为显示单位
         'volume_score': score,
         'file_info': info
     }
     
     return result
 
+def plot_volume_analysis(results: List[Dict]):
+    """
+    绘制文件大小和得分的可视化图表。
+    
+    Args:
+        results: 包含文件分析结果的列表
+    """
+    # 创建图表
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+    
+    # 准备数据
+    sizes = [r['size_mb'] for r in results]
+    scores = [r['volume_score'] for r in results]
+    names = [r['file_name'] for r in results]
+    
+    # 1. 散点图：文件大小 vs 得分
+    scatter = ax1.scatter(sizes, scores, alpha=0.6)
+    ax1.set_xlabel('File Size (MB)')
+    ax1.set_ylabel('Volume Score')
+    ax1.set_title('File Size vs Volume Score')
+    ax1.grid(True, linestyle='--', alpha=0.7)
+    
+    # 添加趋势线
+    z = np.polyfit(sizes, scores, 1)
+    p = np.poly1d(z)
+    ax1.plot(sizes, p(sizes), "r--", alpha=0.8)
+    
+    # 2. 得分分布直方图
+    ax2.hist(scores, bins=10, edgecolor='black')
+    ax2.set_xlabel('Volume Score')
+    ax2.set_ylabel('Number of Files')
+    ax2.set_title('Distribution of Volume Scores')
+    ax2.grid(True, linestyle='--', alpha=0.7)
+    
+    # 调整布局
+    plt.tight_layout()
+    
+    # 保存图表
+    plt.savefig('volume_analysis.png')
+    print("\n图表已保存为 'volume_analysis.png'")
+    
+    # 显示图表
+    plt.show()
+
+def plot_score_curve():
+    """
+    绘制文件大小从0到170MB时的得分变化曲线。
+    """
+    # 创建文件大小范围（0到170MB，转换为GB）
+    sizes_mb = np.linspace(0, 170, 1000)  # 1000个点使曲线更平滑
+    sizes_gb = sizes_mb / 1024  # 转换为GB
+    
+    # 计算每个大小对应的得分
+    scores = [quantify_volume(size_gb) for size_gb in sizes_gb]
+    
+    # 创建图表
+    plt.figure(figsize=(10, 6))
+    
+    # 绘制曲线
+    plt.plot(sizes_mb, scores, 'b-', linewidth=2)
+    
+    # 添加一些关键点的标记
+    key_sizes = [0, 10, 50, 100, 170]  # MB
+    key_scores = [quantify_volume(size/1024) for size in key_sizes]
+    plt.scatter(key_sizes, key_scores, color='red', s=50, zorder=5)
+    
+    # 为关键点添加标注
+    for size, score in zip(key_sizes, key_scores):
+        plt.annotate(f'({size}MB, {score:.1f}分)',
+                    xy=(size, score),
+                    xytext=(10, 10),
+                    textcoords='offset points',
+                    ha='left',
+                    va='bottom',
+                    bbox=dict(boxstyle='round,pad=0.5', fc='yellow', alpha=0.5))
+    
+    # 设置图表属性
+    plt.title('文件大小与得分关系曲线', fontsize=12)
+    plt.xlabel('文件大小 (MB)', fontsize=10)
+    plt.ylabel('Volume Score', fontsize=10)
+    plt.grid(True, linestyle='--', alpha=0.7)
+    
+    # 设置坐标轴范围
+    plt.xlim(-5, 175)  # 留出一些边距
+    plt.ylim(-5, 105)  # 留出一些边距
+    
+    # 调整布局
+    plt.tight_layout()
+    
+    # 保存图表
+    plt.savefig('score_curve.png')
+    print("\n得分曲线图已保存为 'score_curve.png'")
+    
+    # 显示图表
+    plt.show()
+
 # 示例用法：
 if __name__ == "__main__":
-    # 测试单个数据集
-    # dataset_path = "数据集/资产负债表.7z"
-    # size_gb, score = get_dataset_volume_score(dataset_path)
-    # print(f"\n数据集: {dataset_path}")
-    # print(f"大小: {size_gb:.2f} GB")
-    # print(f"容量得分: {score:.4f}")
-
-    # 测试Excel文件
-    excel_path = "数据集/高管及员工薪酬/高管及员工薪酬.xlsx"
-    try:
-        result = get_excel_volume_score(excel_path)
-        print(f"\n数据集: {result['file_path']}")
-        print(f"大小: {result['size_gb']:.4f} GB")
-        print(f"容量得分: {result['volume_score']:.4f}")
-        print("\n文件详细信息:")
-        print(f"行数: {result['file_info'].get('rows', 'N/A')}")
-        print(f"列数: {result['file_info'].get('columns', 'N/A')}")
-        print(f"列名: {result['file_info'].get('column_names', 'N/A')}")
-        print(f"内存使用: {result['file_info'].get('memory_usage', 'N/A')} bytes")
-    except Exception as e:
-        print(f"处理文件时出错: {e}")
+    # 绘制得分曲线
+    plot_score_curve()
+    
+    # 询问是否要分析文件
+    choice = input("\n是否要分析实际文件？(y/n): ").strip().lower()
+    
+    if choice == 'y':
+        # 测试目录下的所有Excel文件
+        excel_dir = r"e:\wxq_postgradute\数据集\extracted_excel_files"
+        try:
+            # 获取目录下所有Excel文件
+            excel_files = list(Path(excel_dir).glob('*.xlsx'))
+            
+            if not excel_files:
+                print(f"No Excel files found in {excel_dir}")
+            else:
+                print(f"\nFound {len(excel_files)} Excel files. Analyzing...")
+                
+                # 存储所有结果
+                results = []
+                
+                # 分析每个文件
+                for file_path in excel_files:
+                    try:
+                        result = get_excel_volume_score(file_path)
+                        results.append({
+                            'file_name': file_path.name,
+                            'size_mb': result['size_mb'],
+                            'volume_score': result['volume_score'],
+                            'rows': result['file_info'].get('rows', 'N/A'),
+                            'columns': result['file_info'].get('columns', 'N/A')
+                        })
+                        print(f"\nProcessed: {file_path.name}")
+                        print(f"Size: {result['size_mb']:.2f} MB")
+                        print(f"Volume Score: {result['volume_score']:.2f}")
+                        print(f"Rows: {result['file_info'].get('rows', 'N/A')}")
+                        print(f"Columns: {result['file_info'].get('columns', 'N/A')}")
+                    except Exception as e:
+                        print(f"Error processing {file_path.name}: {str(e)}")
+                
+                # 转换为DataFrame并排序
+                df_results = pd.DataFrame(results)
+                df_results = df_results.sort_values('volume_score', ascending=False)
+                
+                # 格式化大小列
+                df_results['size_mb'] = df_results['size_mb'].map('{:.2f}'.format)
+                
+                # 显示汇总结果
+                print("\n=== Summary of All Files ===")
+                print(df_results.to_string(index=False))
+                
+                # 显示统计信息
+                print("\n=== Statistics ===")
+                print(f"Total files analyzed: {len(df_results)}")
+                print(f"Average volume score: {df_results['volume_score'].mean():.2f}")
+                print(f"Highest volume score: {df_results['volume_score'].max():.2f}")
+                print(f"Lowest volume score: {df_results['volume_score'].min():.2f}")
+                
+                # 绘制可视化图表
+                plot_volume_analysis(results)
+                
+        except Exception as e:
+            print(f"Error: {str(e)}")
 
     # # 测试不同大小的数据集
     # print("\n不同大小的数据集得分示例：")
