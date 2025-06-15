@@ -5,7 +5,186 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
-from typing import Union, List, Dict, Tuple
+from typing import Union, List, Dict, Tuple, Optional
+import logging
+
+# 配置日志
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class VolumeScorer:
+    """
+    数据量评分器类，用于计算数据集的数据量得分
+    使用改进的Sigmoid函数来评估数据量对数据集容量的贡献
+    """
+    
+    def __init__(self, 
+                 v_optimal: float = 1000.0,  # 最佳数据量阈值
+                 k: float = 0.001,          # 曲线陡峭度参数
+                 min_volume: float = 100.0,  # 最小有效数据量
+                 max_volume: float = 1000000.0):  # 最大有效数据量
+        """
+        初始化数据量评分器
+        
+        Args:
+            v_optimal: 最佳数据量阈值，得分曲线的拐点
+            k: 曲线陡峭度参数，控制得分增长速度
+            min_volume: 最小有效数据量
+            max_volume: 最大有效数据量
+        """
+        self.v_optimal = v_optimal
+        self.k = k
+        self.min_volume = min_volume
+        self.max_volume = max_volume
+        
+    def _normalize_volume(self, volume: float) -> float:
+        """
+        将数据量标准化到有效范围内
+        
+        Args:
+            volume: 原始数据量
+            
+        Returns:
+            标准化后的数据量
+        """
+        return np.clip(volume, self.min_volume, self.max_volume)
+    
+    def _sigmoid_score(self, volume: float) -> float:
+        """
+        使用改进的Sigmoid函数计算数据量得分
+        
+        Args:
+            volume: 标准化后的数据量
+            
+        Returns:
+            数据量得分 (0-1之间)
+        """
+        normalized_volume = self._normalize_volume(volume)
+        score = 1 / (1 + np.exp(-self.k * (normalized_volume - self.v_optimal)))
+        return float(score)
+    
+    def calculate_volume_score(self, 
+                             data: Union[pd.DataFrame, str],
+                             volume_type: str = 'rows') -> Dict[str, float]:
+        """
+        计算数据集的数据量得分
+        
+        Args:
+            data: 数据集（DataFrame或文件路径）
+            volume_type: 数据量类型 ('rows' 或 'size')
+            
+        Returns:
+            包含数据量得分的字典
+        """
+        try:
+            # 获取数据量
+            if isinstance(data, str):
+                if not os.path.exists(data):
+                    raise FileNotFoundError(f"文件不存在: {data}")
+                
+                if volume_type == 'rows':
+                    volume = len(pd.read_csv(data))
+                else:  # size
+                    volume = os.path.getsize(data) / (1024 * 1024)  # 转换为MB
+            else:
+                if volume_type == 'rows':
+                    volume = len(data)
+                else:  # size
+                    # 估算DataFrame的内存大小（MB）
+                    volume = data.memory_usage(deep=True).sum() / (1024 * 1024)
+            
+            # 计算得分
+            score = self._sigmoid_score(volume)
+            
+            return {
+                'volume': volume,
+                'score': score,
+                'normalized_volume': self._normalize_volume(volume)
+            }
+            
+        except Exception as e:
+            logger.error(f"计算数据量得分时发生错误: {str(e)}")
+            raise
+    
+    def get_volume_metrics(self, 
+                          data: Union[pd.DataFrame, str],
+                          volume_type: str = 'rows') -> Dict[str, float]:
+        """
+        获取详细的数据量指标
+        
+        Args:
+            data: 数据集（DataFrame或文件路径）
+            volume_type: 数据量类型 ('rows' 或 'size')
+            
+        Returns:
+            包含详细数据量指标的字典
+        """
+        try:
+            # 计算基本得分
+            basic_metrics = self.calculate_volume_score(data, volume_type)
+            
+            # 计算额外指标
+            volume = basic_metrics['volume']
+            normalized_volume = basic_metrics['normalized_volume']
+            score = basic_metrics['score']
+            
+            # 计算与最佳值的差距
+            gap_to_optimal = abs(volume - self.v_optimal)
+            
+            # 计算数据量效率（当前得分与数据量的比值）
+            efficiency = score / normalized_volume if normalized_volume > 0 else 0
+            
+            return {
+                'raw_volume': volume,
+                'normalized_volume': normalized_volume,
+                'score': score,
+                'gap_to_optimal': gap_to_optimal,
+                'efficiency': efficiency,
+                'is_optimal': volume >= self.v_optimal,
+                'is_minimal': volume >= self.min_volume
+            }
+            
+        except Exception as e:
+            logger.error(f"获取数据量指标时发生错误: {str(e)}")
+            raise
+
+def get_volume_score(data: Union[pd.DataFrame, str],
+                    v_optimal: float = 1000.0,
+                    k: float = 0.001,
+                    volume_type: str = 'rows') -> Dict[str, float]:
+    """
+    便捷函数：计算数据集的数据量得分
+    
+    Args:
+        data: 数据集（DataFrame或文件路径）
+        v_optimal: 最佳数据量阈值
+        k: 曲线陡峭度参数
+        volume_type: 数据量类型 ('rows' 或 'size')
+        
+    Returns:
+        包含数据量得分的字典
+    """
+    scorer = VolumeScorer(v_optimal=v_optimal, k=k)
+    return scorer.calculate_volume_score(data, volume_type)
+
+def get_volume_metrics(data: Union[pd.DataFrame, str],
+                      v_optimal: float = 1000.0,
+                      k: float = 0.001,
+                      volume_type: str = 'rows') -> Dict[str, float]:
+    """
+    便捷函数：获取详细的数据量指标
+    
+    Args:
+        data: 数据集（DataFrame或文件路径）
+        v_optimal: 最佳数据量阈值
+        k: 曲线陡峭度参数
+        volume_type: 数据量类型 ('rows' 或 'size')
+        
+    Returns:
+        包含详细数据量指标的字典
+    """
+    scorer = VolumeScorer(v_optimal=v_optimal, k=k)
+    return scorer.get_volume_metrics(data, volume_type)
 
 def calculate_dataset_size(dataset_path: Union[str, Path]) -> float:
     """
